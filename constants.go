@@ -71,3 +71,11 @@ const (
 	koidTypeProcess koidType = 1
 	koidTypeThread  koidType = 2
 )
+
+type BlobType int
+
+const (
+	BlobTypeData       BlobType = 1
+	BlobTypeLastBranch BlobType = 2
+	BlobTypePerfetto   BlobType = 3
+)

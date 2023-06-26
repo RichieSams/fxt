@@ -147,6 +147,10 @@ func TestWrite(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// Add a blob record
+	err = writer.AddBlobRecord("TestBlob", []byte("testing123"), fxt.BlobTypeData)
+	require.NoError(t, err)
+
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)

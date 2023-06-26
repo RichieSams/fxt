@@ -826,3 +826,33 @@ func (w *Writer) AddFlowEndEvent(category string, name string, processId KernelO
 
 	return nil
 }
+
+func (w *Writer) AddBlobRecord(name string, data []byte, blobType BlobType) error {
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	blobSize := len(data)
+	paddedSize := (blobSize + 8 - 1) & (-8)
+	diff := paddedSize - blobSize
+
+	sizeInWords := 1 + (paddedSize / 8)
+	header := (uint64(blobType) << 48) | (uint64(blobSize) << 32) | (uint64(nameIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeBlob)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if _, err := w.file.Write(data); err != nil {
+		return fmt.Errorf("failed to write blob data - %w", err)
+	}
+
+	if diff > 0 {
+		buffer := make([]byte, diff)
+		if _, err := w.file.Write(buffer); err != nil {
+			return fmt.Errorf("failed to write blob data padding - %w", err)
+		}
+	}
+
+	return nil
+}
