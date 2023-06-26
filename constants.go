@@ -43,6 +43,22 @@ const (
 	argumentTypeBool    argumentType = 9
 )
 
+type eventType int
+
+const (
+	eventTypeInstant          eventType = 0
+	eventTypeCounter          eventType = 1
+	eventTypeDurationBegin    eventType = 2
+	eventTypeDurationEnd      eventType = 3
+	eventTypeDurationComplete eventType = 4
+	eventTypeAsyncBegin       eventType = 5
+	eventTypeAsyncInstant     eventType = 6
+	eventTypeAsyncEnd         eventType = 7
+	eventTypeFlowBegin        eventType = 8
+	eventTypeFlowStep         eventType = 9
+	eventTypeFlowEnd          eventType = 10
+)
+
 type providerEventType int
 
 const (
