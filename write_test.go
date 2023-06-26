@@ -45,6 +45,8 @@ func TestWrite(t *testing.T) {
 	require.NoError(t, err)
 	err = writer.SetThreadName(3, 87, "Worker0")
 	require.NoError(t, err)
+	err = writer.SetThreadName(3, 26, "Worker1")
+	require.NoError(t, err)
 	err = writer.SetProcessName(4, "Server.exe")
 	require.NoError(t, err)
 	err = writer.SetThreadName(4, 50, "ServerThread")
@@ -149,6 +151,37 @@ func TestWrite(t *testing.T) {
 
 	// Add a blob record
 	err = writer.AddBlobRecord("TestBlob", []byte("testing123"), fxt.BlobTypeData)
+	require.NoError(t, err)
+
+	// Add events with argument data
+	err = writer.AddDurationBeginEventWithArgs("Foo", "Root", 3, 87, 200, map[string]interface{}{"null_arg": nil})
+	require.NoError(t, err)
+
+	err = writer.AddInstantEventWithArgs("OtherThing", "EventHappened", 3, 87, 300, map[string]interface{}{"int_arg": int32(4565)})
+	require.NoError(t, err)
+
+	err = writer.AddDurationBeginEventWithArgs("Foo", "Inner", 3, 87, 400, map[string]interface{}{"uint_arg": uint32(333)})
+	require.NoError(t, err)
+
+	err = writer.AddAsyncBeginEventWithArgs("Asdf", "AsyncThing2", 3, 87, 450, 222, map[string]interface{}{"int64_arg": int64(784)})
+	require.NoError(t, err)
+
+	err = writer.AddDurationCompleteEventWithArgs("OtherService", "DoStuff", 3, 87, 500, 800, map[string]interface{}{"uint64_arg": uint64(454)})
+	require.NoError(t, err)
+
+	err = writer.AddAsyncInstantEventWithArgs("Asdf", "AsyncInstant2", 3, 26, 825, 222, map[string]interface{}{"double_arg": float64(333.3424)})
+	require.NoError(t, err)
+
+	err = writer.AddAsyncEndEventWithArgs("Asdf", "AsyncThing2", 3, 26, 850, 222, map[string]interface{}{"string_arg": "str_value"})
+	require.NoError(t, err)
+
+	err = writer.AddUserspaceObjectRecord("MyAwesomeObject", 3, uintptr(67890), map[string]interface{}{"bool_arg": true})
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEventWithArgs("Foo", "Inner", 3, 87, 900, map[string]interface{}{"pointer_arg": uintptr(67890)})
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEventWithArgs("Foo", "Root", 3, 87, 900, map[string]interface{}{"koid_arg": fxt.KernelObjectID(3)})
 	require.NoError(t, err)
 
 	err = writer.Close()
