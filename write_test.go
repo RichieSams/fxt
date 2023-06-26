@@ -79,6 +79,34 @@ func TestWrite(t *testing.T) {
 	err = writer.AddDurationEndEvent("Foo", "Root", 3, 45, 900)
 	require.NoError(t, err)
 
+	// Test out flows
+	err = writer.AddDurationBeginEvent("CategoryA", "REST Request to server", 3, 45, 950)
+	require.NoError(t, err)
+
+	err = writer.AddFlowBeginEvent("CategoryA", "AwesomeFlow", 3, 45, 955, 123)
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEvent("CategoryA", "REST Request to server", 3, 45, 1000)
+	require.NoError(t, err)
+
+	err = writer.AddDurationBeginEvent("CategoryA", "Server process request", 4, 50, 1000)
+	require.NoError(t, err)
+
+	err = writer.AddFlowStepEvent("CategoryA", "Server request handler", 4, 50, 1005, 123)
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEvent("CategoryA", "Server process request", 4, 50, 1100)
+	require.NoError(t, err)
+
+	err = writer.AddDurationBeginEvent("CategoryA", "Process server response", 3, 45, 1150)
+	require.NoError(t, err)
+
+	err = writer.AddFlowEndEvent("CategoryA", "AwesomeFlow", 3, 45, 1155, 123)
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEvent("CategoryA", "Process server response", 3, 45, 1200)
+	require.NoError(t, err)
+
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)
