@@ -391,3 +391,105 @@ func (w *Writer) AddDurationCompleteEvent(category string, name string, processI
 
 	return nil
 }
+
+func (w *Writer) AddAsyncBeginEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 3
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeAsyncBegin) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, asyncCorrelationId); err != nil {
+		return fmt.Errorf("failed to write async correlation ID - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) AddAsyncInstantEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 3
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeAsyncInstant) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, asyncCorrelationId); err != nil {
+		return fmt.Errorf("failed to write async correlation ID - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) AddAsyncEndEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 3
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeAsyncEnd) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, asyncCorrelationId); err != nil {
+		return fmt.Errorf("failed to write async correlation ID - %w", err)
+	}
+
+	return nil
+}
