@@ -747,3 +747,63 @@ func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID,
 
 	return nil
 }
+
+func (w *Writer) AddContextSwitchRecord(cpuNumber uint16, outgoingThreadState uint8, outgoingThreadId KernelObjectID, incomingThreadId KernelObjectID, timestamp uint64) error {
+	return w.AddContextSwitchRecordWithArgs(cpuNumber, outgoingThreadState, outgoingThreadId, incomingThreadId, timestamp, map[string]interface{}{})
+}
+
+func (w *Writer) AddContextSwitchRecordWithArgs(cpuNumber uint16, outgoingThreadState uint8, outgoingThreadId KernelObjectID, incomingThreadId KernelObjectID, timestamp uint64, arguments map[string]interface{}) error {
+	// Sanity check
+	// Ideally we'd find out the actual ENUM of valid states
+	if outgoingThreadState > 0xF {
+		return fmt.Errorf("invalid outgoingThreadState - %d is too large", outgoingThreadState)
+	}
+
+	// Add up the argument word size
+	// And ensure the argument keys (and string values) are in the string table
+	argumentSizeInWords := 0
+	for key, value := range arguments {
+		size, err := getArgumentSizeInWords(value)
+		if err != nil {
+			return err
+		}
+		argumentSizeInWords += size
+
+		if err := w.addArgumentStringsToTable(key, value); err != nil {
+			return err
+		}
+	}
+
+	sizeInWords := /* Header */ 1 + /* timestamp */ 1 + /* outgoing thread ID */ 1 + /* incoming thread ID */ 1 + /* argument data */ argumentSizeInWords
+	numArgs := len(arguments)
+	header := (uint64(schedulingRecordTypeContextSwitch) << 60) | (uint64(outgoingThreadState) << 36) | (uint64(cpuNumber) << 20) | (uint64(numArgs) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeScheduling)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, outgoingThreadId); err != nil {
+		return fmt.Errorf("failed to write outgoing thread ID - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, incomingThreadId); err != nil {
+		return fmt.Errorf("failed to write incoming thread ID - %w", err)
+	}
+
+	wordsWritten := 0
+	for key, value := range arguments {
+		size, err := w.writeArgument(key, value)
+		if err != nil {
+			return err
+		}
+		wordsWritten += size
+	}
+	if wordsWritten != argumentSizeInWords {
+		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+	}
+
+	return nil
+}

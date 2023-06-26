@@ -184,6 +184,13 @@ func TestWrite(t *testing.T) {
 	err = writer.AddDurationEndEventWithArgs("Foo", "Root", 3, 87, 900, map[string]interface{}{"koid_arg": fxt.KernelObjectID(3)})
 	require.NoError(t, err)
 
+	// Add some scheduling events
+	err = writer.AddContextSwitchRecordWithArgs(3, 1, 45, 234, 250, map[string]interface{}{"incoming_weight": int32(2), "outgoing_weight": int32(4)})
+	require.NoError(t, err)
+
+	err = writer.AddContextSwitchRecordWithArgs(3, 1, 234, 45, 255, map[string]interface{}{"incoming_weight": int32(2), "outgoing_weight": int32(4)})
+	require.NoError(t, err)
+
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)

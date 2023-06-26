@@ -79,3 +79,10 @@ const (
 	BlobTypeLastBranch BlobType = 2
 	BlobTypePerfetto   BlobType = 3
 )
+
+type schedulingRecordType int
+
+const (
+	schedulingRecordTypeContextSwitch schedulingRecordType = 1
+	schedulingRecordTypeThreadWakeup  schedulingRecordType = 2
+)
