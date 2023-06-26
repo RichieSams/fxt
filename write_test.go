@@ -107,6 +107,46 @@ func TestWrite(t *testing.T) {
 	err = writer.AddDurationEndEvent("CategoryA", "Process server response", 3, 45, 1200)
 	require.NoError(t, err)
 
+	// Add some counter events
+	err = writer.AddCounterEvent(
+		"Bar", "CounterA", 3, 45, 250,
+		map[string]interface{}{
+			"int_arg":    int32(111),
+			"uint_arg":   uint32(984),
+			"double_arg": float64(1.0),
+			"int64_arg":  int64(851),
+			"uint64_arg": uint64(35),
+		},
+		555,
+	)
+	require.NoError(t, err)
+
+	err = writer.AddCounterEvent(
+		"Bar", "CounterA", 3, 45, 500,
+		map[string]interface{}{
+			"int_arg":    int32(784),
+			"uint_arg":   uint32(561),
+			"double_arg": float64(4.0),
+			"int64_arg":  int64(445),
+			"uint64_arg": uint64(95),
+		},
+		555,
+	)
+	require.NoError(t, err)
+
+	err = writer.AddCounterEvent(
+		"Bar", "CounterA", 3, 45, 1000,
+		map[string]interface{}{
+			"int_arg":    int32(333),
+			"uint_arg":   uint32(845),
+			"double_arg": float64(9.0),
+			"int64_arg":  int64(521),
+			"uint64_arg": uint64(24),
+		},
+		555,
+	)
+	require.NoError(t, err)
+
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)

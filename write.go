@@ -298,6 +298,237 @@ func (w *Writer) AddInstantEvent(category string, name string, processId KernelO
 	return nil
 }
 
+func getArgumentSizeInWords(value interface{}) (int, error) {
+	if value == nil {
+		return 1, nil
+	}
+
+	switch value.(type) {
+	case int32:
+		return 1, nil
+	case uint32:
+		return 1, nil
+	case int64:
+		return 2, nil
+	case uint64:
+		return 2, nil
+	case float64:
+		return 2, nil
+	case string:
+		return 1, nil
+	case uintptr:
+		return 2, nil
+	case KernelObjectID:
+		return 2, nil
+	case bool:
+		return 1, nil
+	default:
+		return 0, fmt.Errorf("invalid value type `%v` for argument", value)
+	}
+}
+
+func (w *Writer) addArgumentStringsToTable(key string, value interface{}) error {
+	_, err := w.getOrCreateStringIndex(key)
+	if err != nil {
+		return err
+	}
+
+	if v, ok := value.(string); ok {
+		_, err := w.getOrCreateStringIndex(v)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (w *Writer) writeArgument(key string, value interface{}) (numWordsWritten int, err error) {
+	keyIndex, err := w.getStringIndex(key)
+	if err != nil {
+		return 0, err
+	}
+
+	// Check for nil. That will create a null argument
+	if value == nil {
+		sizeInWords := 1
+		header := (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeNull)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		return sizeInWords, nil
+	}
+
+	switch v := value.(type) {
+	case int32:
+		sizeInWords := 1
+		header := (uint64(v) << 32) | (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeInt32)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		return sizeInWords, nil
+	case uint32:
+		sizeInWords := 1
+		header := (uint64(v) << 32) | (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeUInt32)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		return sizeInWords, nil
+	case int64:
+		sizeInWords := 2
+		header := (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeInt64)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		if err := binary.Write(w.file, binary.LittleEndian, v); err != nil {
+			return 0, fmt.Errorf("failed to write argument value - %w", err)
+		}
+
+		return sizeInWords, nil
+	case uint64:
+		sizeInWords := 2
+		header := (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeUInt64)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		if err := binary.Write(w.file, binary.LittleEndian, v); err != nil {
+			return 0, fmt.Errorf("failed to write argument value - %w", err)
+		}
+
+		return sizeInWords, nil
+	case float64:
+		sizeInWords := 2
+		header := (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeDouble)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		if err := binary.Write(w.file, binary.LittleEndian, v); err != nil {
+			return 0, fmt.Errorf("failed to write argument value - %w", err)
+		}
+
+		return sizeInWords, nil
+	case string:
+		valueIndex, err := w.getStringIndex(v)
+		if err != nil {
+			return 0, err
+		}
+
+		sizeInWords := 1
+		header := (uint64(valueIndex) << 32) | (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeString)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		return sizeInWords, nil
+	case uintptr:
+		sizeInWords := 2
+		header := (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypePointer)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		if err := binary.Write(w.file, binary.LittleEndian, uint64(v)); err != nil {
+			return 0, fmt.Errorf("failed to write argument value - %w", err)
+		}
+
+		return sizeInWords, nil
+	case KernelObjectID:
+		sizeInWords := 2
+		header := (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeKOID)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		if err := binary.Write(w.file, binary.LittleEndian, v); err != nil {
+			return 0, fmt.Errorf("failed to write argument value - %w", err)
+		}
+
+		return sizeInWords, nil
+	case bool:
+		valueBit := 0
+		if v {
+			valueBit = 1
+		}
+
+		sizeInWords := 1
+		header := (uint64(valueBit) << 32) | (uint64(keyIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(argumentTypeBool)
+		if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+			return 0, fmt.Errorf("failed to write argument header - %w", err)
+		}
+
+		return sizeInWords, nil
+	default:
+		return 0, fmt.Errorf("invalid value type `%v` for argument `%s`", value, key)
+	}
+}
+
+func (w *Writer) AddCounterEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, arguments map[string]interface{}, counterId uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	// Add up the argument word size
+	// And ensure the argument keys (and string values) are in the string table
+	argumentSizeInWords := 0
+	for key, value := range arguments {
+		size, err := getArgumentSizeInWords(value)
+		if err != nil {
+			return err
+		}
+		argumentSizeInWords += size
+
+		if err := w.addArgumentStringsToTable(key, value); err != nil {
+			return err
+		}
+	}
+
+	sizeInWords := /* Header */ 1 + /* timestamp */ 1 + /* argument data */ argumentSizeInWords + /* counter ID */ 1
+	numArgs := len(arguments)
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeCounter) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	wordsWritten := 0
+	for key, value := range arguments {
+		size, err := w.writeArgument(key, value)
+		if err != nil {
+			return err
+		}
+		wordsWritten += size
+	}
+	if wordsWritten != argumentSizeInWords {
+		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, counterId); err != nil {
+		return fmt.Errorf("failed to write counter ID - %w", err)
+	}
+
+	return nil
+}
+
 func (w *Writer) AddDurationBeginEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
 	categoryIndex, err := w.getOrCreateStringIndex(category)
 	if err != nil {
