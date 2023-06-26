@@ -268,7 +268,7 @@ func (w *Writer) SetThreadName(processId KernelObjectID, threadId KernelObjectID
 	return nil
 }
 
-func (w *Writer) AddInstantEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
+func (w *Writer) writeEventHeaderAndGenericData(eventType eventType, category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, arguments map[string]interface{}, extraSizeInWords int) error {
 	categoryIndex, err := w.getOrCreateStringIndex(category)
 	if err != nil {
 		return err
@@ -284,15 +284,42 @@ func (w *Writer) AddInstantEvent(category string, name string, processId KernelO
 		return err
 	}
 
-	sizeInWords := 2
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeInstant) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	// Add up the argument word size
+	// And ensure the argument keys (and string values) are in the string table
+	argumentSizeInWords := 0
+	for key, value := range arguments {
+		size, err := getArgumentSizeInWords(value)
+		if err != nil {
+			return err
+		}
+		argumentSizeInWords += size
+
+		if err := w.addArgumentStringsToTable(key, value); err != nil {
+			return err
+		}
+	}
+
+	sizeInWords := /* Header */ 1 + /* timestamp */ 1 + /* argument data */ argumentSizeInWords + /* extra stuff */ extraSizeInWords
+	numArgs := len(arguments)
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventType) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
 	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
 		return fmt.Errorf("failed to write record header - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
 		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	wordsWritten := 0
+	for key, value := range arguments {
+		size, err := w.writeArgument(key, value)
+		if err != nil {
+			return err
+		}
+		wordsWritten += size
+	}
+	if wordsWritten != argumentSizeInWords {
+		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	return nil
@@ -468,58 +495,23 @@ func (w *Writer) writeArgument(key string, value interface{}) (numWordsWritten i
 	}
 }
 
+func (w *Writer) AddInstantEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
+	return w.AddInstantEventWithArgs(category, name, processId, threadId, timestamp, map[string]interface{}{})
+}
+
+func (w *Writer) AddInstantEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 0
+	if err := w.writeEventHeaderAndGenericData(eventTypeInstant, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (w *Writer) AddCounterEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, arguments map[string]interface{}, counterId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeCounter, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	// Add up the argument word size
-	// And ensure the argument keys (and string values) are in the string table
-	argumentSizeInWords := 0
-	for key, value := range arguments {
-		size, err := getArgumentSizeInWords(value)
-		if err != nil {
-			return err
-		}
-		argumentSizeInWords += size
-
-		if err := w.addArgumentStringsToTable(key, value); err != nil {
-			return err
-		}
-	}
-
-	sizeInWords := /* Header */ 1 + /* timestamp */ 1 + /* argument data */ argumentSizeInWords + /* counter ID */ 1
-	numArgs := len(arguments)
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeCounter) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
-	}
-
-	wordsWritten := 0
-	for key, value := range arguments {
-		size, err := w.writeArgument(key, value)
-		if err != nil {
-			return err
-		}
-		wordsWritten += size
-	}
-	if wordsWritten != argumentSizeInWords {
-		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, counterId); err != nil {
@@ -530,124 +522,56 @@ func (w *Writer) AddCounterEvent(category string, name string, processId KernelO
 }
 
 func (w *Writer) AddDurationBeginEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddDurationBeginEventWithArgs(category, name, processId, threadId, timestamp, map[string]interface{}{})
+}
+
+func (w *Writer) AddDurationBeginEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 0
+	if err := w.writeEventHeaderAndGenericData(eventTypeDurationBegin, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 2
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeDurationBegin) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	return nil
 }
 
 func (w *Writer) AddDurationEndEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddDurationEndEventWithArgs(category, name, processId, threadId, timestamp, map[string]interface{}{})
+}
+
+func (w *Writer) AddDurationEndEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 0
+	if err := w.writeEventHeaderAndGenericData(eventTypeDurationEnd, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 2
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeDurationEnd) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	return nil
 }
 
 func (w *Writer) AddDurationCompleteEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, beginTimestamp uint64, endTimestamp uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddDurationCompleteEventWithArgs(category, name, processId, threadId, beginTimestamp, endTimestamp, map[string]interface{}{})
+}
+
+func (w *Writer) AddDurationCompleteEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, beginTimestamp uint64, endTimestamp uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeDurationComplete, category, name, processId, threadId, beginTimestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeDurationComplete) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, beginTimestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, endTimestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
+		return fmt.Errorf("failed to write end timestamp - %w", err)
 	}
 
 	return nil
 }
 
 func (w *Writer) AddAsyncBeginEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddAsyncBeginEventWithArgs(category, name, processId, threadId, timestamp, asyncCorrelationId, map[string]interface{}{})
+}
+
+func (w *Writer) AddAsyncBeginEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeAsyncBegin, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeAsyncBegin) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, asyncCorrelationId); err != nil {
@@ -658,30 +582,13 @@ func (w *Writer) AddAsyncBeginEvent(category string, name string, processId Kern
 }
 
 func (w *Writer) AddAsyncInstantEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddAsyncInstantEventWithArgs(category, name, processId, threadId, timestamp, asyncCorrelationId, map[string]interface{}{})
+}
+
+func (w *Writer) AddAsyncInstantEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeAsyncInstant, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeAsyncInstant) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, asyncCorrelationId); err != nil {
@@ -692,30 +599,13 @@ func (w *Writer) AddAsyncInstantEvent(category string, name string, processId Ke
 }
 
 func (w *Writer) AddAsyncEndEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddAsyncEndEventWithArgs(category, name, processId, threadId, timestamp, asyncCorrelationId, map[string]interface{}{})
+}
+
+func (w *Writer) AddAsyncEndEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, asyncCorrelationId uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeAsyncEnd, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeAsyncEnd) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, asyncCorrelationId); err != nil {
@@ -726,102 +616,51 @@ func (w *Writer) AddAsyncEndEvent(category string, name string, processId Kernel
 }
 
 func (w *Writer) AddFlowBeginEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, flowCorrelationId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddFlowBeginEventWithArgs(category, name, processId, threadId, timestamp, flowCorrelationId, map[string]interface{}{})
+}
+
+func (w *Writer) AddFlowBeginEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, flowCorrelationId uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeFlowBegin, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeFlowBegin) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, flowCorrelationId); err != nil {
-		return fmt.Errorf("failed to write flow correlation ID - %w", err)
+		return fmt.Errorf("failed to write async correlation ID - %w", err)
 	}
 
 	return nil
 }
 
 func (w *Writer) AddFlowStepEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, flowCorrelationId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddFlowStepEventWithArgs(category, name, processId, threadId, timestamp, flowCorrelationId, map[string]interface{}{})
+}
+
+func (w *Writer) AddFlowStepEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, flowCorrelationId uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeFlowStep, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeFlowStep) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, flowCorrelationId); err != nil {
-		return fmt.Errorf("failed to write flow correlation ID - %w", err)
+		return fmt.Errorf("failed to write async correlation ID - %w", err)
 	}
 
 	return nil
 }
 
 func (w *Writer) AddFlowEndEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, flowCorrelationId uint64) error {
-	categoryIndex, err := w.getOrCreateStringIndex(category)
-	if err != nil {
+	return w.AddFlowEndEventWithArgs(category, name, processId, threadId, timestamp, flowCorrelationId, map[string]interface{}{})
+}
+
+func (w *Writer) AddFlowEndEventWithArgs(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64, flowCorrelationId uint64, arguments map[string]interface{}) error {
+	extraSizeInWords := 1
+	if err := w.writeEventHeaderAndGenericData(eventTypeFlowEnd, category, name, processId, threadId, timestamp, arguments, extraSizeInWords); err != nil {
 		return err
-	}
-
-	nameIndex, err := w.getOrCreateStringIndex(name)
-	if err != nil {
-		return err
-	}
-
-	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
-	if err != nil {
-		return err
-	}
-
-	sizeInWords := 3
-	numArgs := 0
-	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeFlowEnd) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
-	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
-		return fmt.Errorf("failed to write record header - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
-		return fmt.Errorf("failed to write timestamp - %w", err)
 	}
 
 	if err := binary.Write(w.file, binary.LittleEndian, flowCorrelationId); err != nil {
-		return fmt.Errorf("failed to write flow correlation ID - %w", err)
+		return fmt.Errorf("failed to write async correlation ID - %w", err)
 	}
 
 	return nil
@@ -852,6 +691,58 @@ func (w *Writer) AddBlobRecord(name string, data []byte, blobType BlobType) erro
 		if _, err := w.file.Write(buffer); err != nil {
 			return fmt.Errorf("failed to write blob data padding - %w", err)
 		}
+	}
+
+	return nil
+}
+
+func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID, pointerValue uintptr, arguments map[string]interface{}) error {
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	// Add up the argument word size
+	// And ensure the argument keys (and string values) are in the string table
+	argumentSizeInWords := 0
+	for key, value := range arguments {
+		size, err := getArgumentSizeInWords(value)
+		if err != nil {
+			return err
+		}
+		argumentSizeInWords += size
+
+		if err := w.addArgumentStringsToTable(key, value); err != nil {
+			return err
+		}
+	}
+
+	sizeInWords := /* Header */ 1 + /* pointer value */ 1 + /* process ID */ 1 + /* argument data */ argumentSizeInWords
+	threadIndex := 0
+	numArgs := len(arguments)
+	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(threadIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeUserspaceObject)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, uint64(pointerValue)); err != nil {
+		return fmt.Errorf("failed to write pointer value - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, processId); err != nil {
+		return fmt.Errorf("failed to write process ID - %w", err)
+	}
+
+	wordsWritten := 0
+	for key, value := range arguments {
+		size, err := w.writeArgument(key, value)
+		if err != nil {
+			return err
+		}
+		wordsWritten += size
+	}
+	if wordsWritten != argumentSizeInWords {
+		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	return nil
