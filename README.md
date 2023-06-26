@@ -1,2 +1,3 @@
 # fxt
-A library for creating Fuschia Tracing System (FXT) files
+
+A library for creating Fuschia Tracing Format (FXT) files
