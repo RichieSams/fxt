@@ -38,6 +38,11 @@ func TestWrite(t *testing.T) {
 	err = writer.AddInitializationRecord(1000)
 	require.NoError(t, err)
 
+	// Name the processes / threads
+	err = writer.SetProcessName(3, "Test.exe")
+	require.NoError(t, err)
+	err = writer.SetThreadName(3, 45, "Main")
+	require.NoError(t, err)
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)

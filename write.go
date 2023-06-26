@@ -125,3 +125,145 @@ func (w *Writer) AddInitializationRecord(numTicksPerSecond uint64) error {
 
 	return nil
 }
+
+func (w *Writer) addStringRecord(stringIndex uint16, str string) error {
+	strBytes := []byte(str)
+	strLen := len(strBytes)
+	if strLen > math.MaxUint8 {
+		return fmt.Errorf("string is too long")
+	}
+
+	paddedStrLen := (strLen + 8 - 1) & (-8)
+	diff := paddedStrLen - strLen
+
+	sizeInWords := 1 + (paddedStrLen / 8)
+	header := (uint64(strLen) << 32) | (uint64(stringIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeString)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if _, err := w.file.Write(strBytes); err != nil {
+		return fmt.Errorf("failed to write string data - %w", err)
+	}
+	if diff > 0 {
+		buffer := make([]byte, diff)
+		if _, err := w.file.Write(buffer); err != nil {
+			return fmt.Errorf("failed to write string padding - %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (w *Writer) addThreadRecord(threadIndex uint16, processId KernelObjectID, threadId KernelObjectID) error {
+	sizeInWords := 3
+	header := (uint64(threadIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeThread)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, processId); err != nil {
+		return fmt.Errorf("failed to write process ID - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, threadId); err != nil {
+		return fmt.Errorf("failed to write thread ID - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) getStringIndex(str string) (uint16, error) {
+	index, ok := w.stringTable[str]
+	if !ok {
+		return 0, fmt.Errorf("`%s` does not exist in the string table", str)
+	}
+
+	return index, nil
+}
+
+func (w *Writer) getOrCreateStringIndex(str string) (uint16, error) {
+	index, ok := w.stringTable[str]
+	if !ok {
+		index = w.nextStringIndex
+		w.nextStringIndex++
+		w.stringTable[str] = index
+		if err := w.addStringRecord(index, str); err != nil {
+			return 0, fmt.Errorf("failed to add string record for `%s` - %w", str, err)
+		}
+	}
+
+	return index, nil
+}
+
+func (w *Writer) getOrCreateThreadIndex(processId KernelObjectID, threadId KernelObjectID) (uint16, error) {
+	thread := Thread{ProcessId: processId, ThreadId: threadId}
+	threadIndex, ok := w.threadTable[thread]
+	if !ok {
+		threadIndex = w.nextThreadIndex
+		w.nextThreadIndex++
+		w.threadTable[thread] = threadIndex
+		if err := w.addThreadRecord(threadIndex, processId, threadId); err != nil {
+			return 0, fmt.Errorf("failed to add thread record - %w", err)
+		}
+	}
+
+	return threadIndex, nil
+}
+
+func (w *Writer) SetProcessName(processId KernelObjectID, name string) error {
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := /* header */ 1 + /* processID */ 1
+	numArgs := 0
+	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(koidTypeProcess) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeKernelObject)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, processId); err != nil {
+		return fmt.Errorf("failed to write process ID - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) SetThreadName(processId KernelObjectID, threadId KernelObjectID, name string) error {
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	processIndex, err := w.getOrCreateStringIndex("process")
+	if err != nil {
+		return err
+	}
+
+	argumentSizeInWords := 2
+
+	sizeInWords := /* header */ 1 + /* threadID */ 1 + /* argument data */ argumentSizeInWords
+	numArgs := 1
+	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(koidTypeThread) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeKernelObject)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, threadId); err != nil {
+		return fmt.Errorf("failed to write thread ID - %w", err)
+	}
+
+	// Write KIOD Argument to reference the process ID
+	argHeader := (uint64(processIndex) << 16) | (uint64(argumentSizeInWords) << 4) | uint64(argumentTypeKOID)
+	if err := binary.Write(w.file, binary.LittleEndian, argHeader); err != nil {
+		return fmt.Errorf("failed to write argument header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, processId); err != nil {
+		return fmt.Errorf("failed to write process ID - %w", err)
+	}
+
+	return nil
+}

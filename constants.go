@@ -28,8 +28,30 @@ const (
 	metadataTypeProviderEvent   metadataType = 3
 )
 
+type argumentType int
+
+const (
+	argumentTypeNull    argumentType = 0
+	argumentTypeInt32   argumentType = 1
+	argumentTypeUInt32  argumentType = 2
+	argumentTypeInt64   argumentType = 3
+	argumentTypeUInt64  argumentType = 4
+	argumentTypeDouble  argumentType = 5
+	argumentTypeString  argumentType = 6
+	argumentTypePointer argumentType = 7
+	argumentTypeKOID    argumentType = 8
+	argumentTypeBool    argumentType = 9
+)
+
 type providerEventType int
 
 const (
 	providerEventTypeBufferFilledUp providerEventType = 0
+)
+
+type koidType int
+
+const (
+	koidTypeProcess koidType = 1
+	koidTypeThread  koidType = 2
 )
