@@ -807,3 +807,53 @@ func (w *Writer) AddContextSwitchRecordWithArgs(cpuNumber uint16, outgoingThread
 
 	return nil
 }
+
+func (w *Writer) AddThreadWakeupRecord(cpuNumber uint16, wakingThreadId KernelObjectID, timestamp uint64) error {
+	return w.AddThreadWakeupRecordWithArgs(cpuNumber, wakingThreadId, timestamp, map[string]interface{}{})
+}
+
+func (w *Writer) AddThreadWakeupRecordWithArgs(cpuNumber uint16, wakingThreadId KernelObjectID, timestamp uint64, arguments map[string]interface{}) error {
+	// Add up the argument word size
+	// And ensure the argument keys (and string values) are in the string table
+	argumentSizeInWords := 0
+	for key, value := range arguments {
+		size, err := getArgumentSizeInWords(value)
+		if err != nil {
+			return err
+		}
+		argumentSizeInWords += size
+
+		if err := w.addArgumentStringsToTable(key, value); err != nil {
+			return err
+		}
+	}
+
+	sizeInWords := /* Header */ 1 + /* timestamp */ 1 + /* waking thread ID */ 1 + /* argument data */ argumentSizeInWords
+	numArgs := len(arguments)
+	header := (uint64(schedulingRecordTypeThreadWakeup) << 60) | (uint64(cpuNumber) << 20) | (uint64(numArgs) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeScheduling)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, wakingThreadId); err != nil {
+		return fmt.Errorf("failed to write waking thread ID - %w", err)
+	}
+
+	wordsWritten := 0
+	for key, value := range arguments {
+		size, err := w.writeArgument(key, value)
+		if err != nil {
+			return err
+		}
+		wordsWritten += size
+	}
+	if wordsWritten != argumentSizeInWords {
+		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+	}
+
+	return nil
+}

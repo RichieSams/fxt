@@ -191,6 +191,9 @@ func TestWrite(t *testing.T) {
 	err = writer.AddContextSwitchRecordWithArgs(3, 1, 234, 45, 255, map[string]interface{}{"incoming_weight": int32(2), "outgoing_weight": int32(4)})
 	require.NoError(t, err)
 
+	err = writer.AddThreadWakeupRecord(3, 45, 925)
+	require.NoError(t, err)
+
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)
