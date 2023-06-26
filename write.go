@@ -267,3 +267,127 @@ func (w *Writer) SetThreadName(processId KernelObjectID, threadId KernelObjectID
 
 	return nil
 }
+
+func (w *Writer) AddInstantEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 2
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeInstant) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) AddDurationBeginEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 2
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeDurationBegin) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) AddDurationEndEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, timestamp uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 2
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeDurationEnd) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, timestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	return nil
+}
+
+func (w *Writer) AddDurationCompleteEvent(category string, name string, processId KernelObjectID, threadId KernelObjectID, beginTimestamp uint64, endTimestamp uint64) error {
+	categoryIndex, err := w.getOrCreateStringIndex(category)
+	if err != nil {
+		return err
+	}
+
+	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
+	if err != nil {
+		return err
+	}
+
+	sizeInWords := 3
+	numArgs := 0
+	header := (uint64(nameIndex) << 48) | (uint64(categoryIndex) << 32) | (uint64(threadIndex) << 24) | (uint64(numArgs) << 20) | (uint64(eventTypeDurationComplete) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeEvent)
+	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
+		return fmt.Errorf("failed to write record header - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, beginTimestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	if err := binary.Write(w.file, binary.LittleEndian, endTimestamp); err != nil {
+		return fmt.Errorf("failed to write timestamp - %w", err)
+	}
+
+	return nil
+}

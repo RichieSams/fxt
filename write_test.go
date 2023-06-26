@@ -43,6 +43,26 @@ func TestWrite(t *testing.T) {
 	require.NoError(t, err)
 	err = writer.SetThreadName(3, 45, "Main")
 	require.NoError(t, err)
+
+	// Do a basic set of spans
+	err = writer.AddDurationBeginEvent("Foo", "Root", 3, 45, 200)
+	require.NoError(t, err)
+
+	err = writer.AddInstantEvent("OtherThing", "EventHappened", 3, 45, 300)
+	require.NoError(t, err)
+
+	err = writer.AddDurationBeginEvent("Foo", "Inner", 3, 45, 400)
+	require.NoError(t, err)
+
+	err = writer.AddDurationCompleteEvent("OtherService", "DoStuff", 3, 45, 500, 800)
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEvent("Foo", "Inner", 3, 45, 900)
+	require.NoError(t, err)
+
+	err = writer.AddDurationEndEvent("Foo", "Root", 3, 45, 900)
+	require.NoError(t, err)
+
 	err = writer.Close()
 	closed = true
 	require.NoError(t, err)
