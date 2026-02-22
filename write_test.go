@@ -1,7 +1,6 @@
 package fxt_test
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -11,13 +10,7 @@ import (
 )
 
 func TestWrite(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "")
-	require.NoError(t, err)
-
-	defer func() {
-		err := os.RemoveAll(tempDir)
-		require.NoError(t, err)
-	}()
+	tempDir := t.TempDir()
 
 	writer, err := fxt.NewWriter(filepath.Join(tempDir, "test.fxt"))
 	require.NoError(t, err)
@@ -154,34 +147,34 @@ func TestWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add events with argument data
-	err = writer.AddDurationBeginEventWithArgs("Foo", "Root", 3, 87, 200, map[string]interface{}{"null_arg": nil})
+	err = writer.AddDurationBeginEventWithArgs("Foo", "Root", 3, 87, 1200, map[string]interface{}{"null_arg": nil})
 	require.NoError(t, err)
 
-	err = writer.AddInstantEventWithArgs("OtherThing", "EventHappened", 3, 87, 300, map[string]interface{}{"int_arg": int32(4565)})
+	err = writer.AddInstantEventWithArgs("OtherThing", "EventHappened", 3, 87, 1300, map[string]interface{}{"int_arg": int32(4565)})
 	require.NoError(t, err)
 
-	err = writer.AddDurationBeginEventWithArgs("Foo", "Inner", 3, 87, 400, map[string]interface{}{"uint_arg": uint32(333)})
+	err = writer.AddDurationBeginEventWithArgs("Foo", "Inner", 3, 87, 1400, map[string]interface{}{"uint_arg": uint32(333)})
 	require.NoError(t, err)
 
-	err = writer.AddAsyncBeginEventWithArgs("Asdf", "AsyncThing2", 3, 87, 450, 222, map[string]interface{}{"int64_arg": int64(784)})
+	err = writer.AddAsyncBeginEventWithArgs("Asdf", "AsyncThing2", 3, 87, 1450, 222, map[string]interface{}{"int64_arg": int64(784)})
 	require.NoError(t, err)
 
-	err = writer.AddDurationCompleteEventWithArgs("OtherService", "DoStuff", 3, 87, 500, 800, map[string]interface{}{"uint64_arg": uint64(454)})
+	err = writer.AddDurationCompleteEventWithArgs("OtherService", "DoStuff", 3, 87, 1500, 800, map[string]interface{}{"uint64_arg": uint64(454)})
 	require.NoError(t, err)
 
-	err = writer.AddAsyncInstantEventWithArgs("Asdf", "AsyncInstant2", 3, 26, 825, 222, map[string]interface{}{"double_arg": float64(333.3424)})
+	err = writer.AddAsyncInstantEventWithArgs("Asdf", "AsyncInstant2", 3, 26, 1825, 222, map[string]interface{}{"double_arg": float64(333.3424)})
 	require.NoError(t, err)
 
-	err = writer.AddAsyncEndEventWithArgs("Asdf", "AsyncThing2", 3, 26, 850, 222, map[string]interface{}{"string_arg": "str_value"})
+	err = writer.AddAsyncEndEventWithArgs("Asdf", "AsyncThing2", 3, 26, 1850, 222, map[string]interface{}{"string_arg": "str_value"})
 	require.NoError(t, err)
 
-	err = writer.AddUserspaceObjectRecord("MyAwesomeObject", 3, uintptr(67890), map[string]interface{}{"bool_arg": true})
+	err = writer.AddUserspaceObjectRecord("MyAwesomeObject", 3, 26, uintptr(67890), map[string]interface{}{"bool_arg": true})
 	require.NoError(t, err)
 
-	err = writer.AddDurationEndEventWithArgs("Foo", "Inner", 3, 87, 900, map[string]interface{}{"pointer_arg": uintptr(67890)})
+	err = writer.AddDurationEndEventWithArgs("Foo", "Inner", 3, 87, 1900, map[string]interface{}{"pointer_arg": uintptr(67890)})
 	require.NoError(t, err)
 
-	err = writer.AddDurationEndEventWithArgs("Foo", "Root", 3, 87, 900, map[string]interface{}{"koid_arg": fxt.KernelObjectID(3)})
+	err = writer.AddDurationEndEventWithArgs("Foo", "Root", 3, 87, 1900, map[string]interface{}{"koid_arg": fxt.KernelObjectID(3)})
 	require.NoError(t, err)
 
 	// Add some scheduling events

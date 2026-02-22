@@ -3,20 +3,9 @@ package fxt
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 	"os"
 )
-
-// KernelObjectID is a unique identifier for a kernel object
-// for example, a process or thread
-type KernelObjectID uint64
-
-// Thread uniquely identifies a thread within a process
-type Thread struct {
-	ProcessId KernelObjectID
-	ThreadId  KernelObjectID
-}
 
 // NewWriter creates a new FXT file at `filePath` and initializes it with the FXT header
 // It returns a Writer instance which can be used to add records to the file
@@ -57,7 +46,7 @@ func (w *Writer) Close() error {
 }
 
 func (w *Writer) writeMagicNumberRecord() error {
-	if _, err := w.file.Write(fxtMagic); err != nil {
+	if _, err := w.file.Write(fxtMagicComplete); err != nil {
 		return fmt.Errorf("failed to write magic number record - %w", err)
 	}
 	return nil
@@ -93,12 +82,6 @@ func (w *Writer) AddProviderInfoRecord(providerId uint32, providerName string) e
 		}
 	}
 
-	n, err := w.file.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return err
-	}
-	fmt.Print(n)
-
 	return nil
 }
 
@@ -118,7 +101,7 @@ func (w *Writer) AddProviderSectionRecord(providerId uint32) error {
 // AddProviderEventRecord adds a provider event metadata record to the file
 //
 // https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/docs/reference/tracing/trace-format.md#provider-event-metadata
-func (w *Writer) AddProviderEventRecord(providerId uint32, eventType providerEventType) error {
+func (w *Writer) AddProviderEventRecord(providerId uint32, eventType ProviderEventType) error {
 	sizeInWords := 1
 	header := (uint64(eventType) << 52) | (uint64(providerId) << 20) | (uint64(metadataTypeProviderEvent) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeMetadata)
 	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
@@ -150,7 +133,7 @@ func (w *Writer) AddInitializationRecord(numTicksPerSecond uint64) error {
 func (w *Writer) addStringRecord(stringIndex uint16, str string) error {
 	strBytes := []byte(str)
 	strLen := len(strBytes)
-	if strLen > math.MaxUint8 {
+	if strLen > 0x7FFF {
 		return fmt.Errorf("string is too long")
 	}
 
@@ -218,7 +201,7 @@ func (w *Writer) getOrCreateStringIndex(str string) (uint16, error) {
 }
 
 func (w *Writer) getOrCreateThreadIndex(processId KernelObjectID, threadId KernelObjectID) (uint16, error) {
-	thread := Thread{ProcessId: processId, ThreadId: threadId}
+	thread := Thread{ProcessID: processId, ThreadID: threadId}
 	threadIndex, ok := w.threadTable[thread]
 	if !ok {
 		threadIndex = w.nextThreadIndex
@@ -243,7 +226,7 @@ func (w *Writer) SetProcessName(processId KernelObjectID, name string) error {
 
 	sizeInWords := /* header */ 1 + /* processID */ 1
 	numArgs := 0
-	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(koidTypeProcess) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeKernelObject)
+	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(kernelObjectTypeProcess) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeKernelObject)
 	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
 		return fmt.Errorf("failed to write record header - %w", err)
 	}
@@ -273,7 +256,7 @@ func (w *Writer) SetThreadName(processId KernelObjectID, threadId KernelObjectID
 
 	sizeInWords := /* header */ 1 + /* threadID */ 1 + /* argument data */ argumentSizeInWords
 	numArgs := 1
-	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(koidTypeThread) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeKernelObject)
+	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(kernelObjectTypeThread) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeKernelObject)
 	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
 		return fmt.Errorf("failed to write record header - %w", err)
 	}
@@ -352,7 +335,7 @@ func (w *Writer) writeEventHeaderAndGenericData(eventType eventType, category st
 		wordsWritten += size
 	}
 	if wordsWritten != argumentSizeInWords {
-		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+		return fmt.Errorf("expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	return nil
@@ -836,17 +819,22 @@ func (w *Writer) AddFlowEndEventWithArgs(category string, name string, processId
 //
 // https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/docs/reference/tracing/trace-format.md#blob-record
 func (w *Writer) AddBlobRecord(name string, data []byte, blobType BlobType) error {
+	blobSize := len(data)
+	paddedSize := (blobSize + 8 - 1) & (-8)
+	diff := paddedSize - blobSize
+
+	if blobSize > 0x7FFFFF {
+		// Blob length is stored in 23 bits
+		return fmt.Errorf("data is too large - Only 0x7FFFFF bytes of data can be stored in a data record at a time")
+	}
+
 	nameIndex, err := w.getOrCreateStringIndex(name)
 	if err != nil {
 		return err
 	}
 
-	blobSize := len(data)
-	paddedSize := (blobSize + 8 - 1) & (-8)
-	diff := paddedSize - blobSize
-
 	sizeInWords := 1 + (paddedSize / 8)
-	header := (uint64(blobType) << 48) | (uint64(blobSize) << 32) | (uint64(nameIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeBlob)
+	header := (uint64(blobType) << 48) | (uint64(blobSize) << 24) | (uint64(nameIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeBlob)
 	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
 		return fmt.Errorf("failed to write record header - %w", err)
 	}
@@ -868,8 +856,13 @@ func (w *Writer) AddBlobRecord(name string, data []byte, blobType BlobType) erro
 // AddUserspaceObjectRecord adds a userspace object record to the file
 //
 // https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/docs/reference/tracing/trace-format.md#userspace-object-record
-func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID, pointerValue uintptr, arguments map[string]interface{}) error {
+func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID, threadId KernelObjectID, pointerValue uintptr, arguments map[string]interface{}) error {
 	nameIndex, err := w.getOrCreateStringIndex(name)
+	if err != nil {
+		return err
+	}
+
+	threadIndex, err := w.getOrCreateThreadIndex(processId, threadId)
 	if err != nil {
 		return err
 	}
@@ -889,8 +882,7 @@ func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID,
 		}
 	}
 
-	sizeInWords := /* Header */ 1 + /* pointer value */ 1 + /* process ID */ 1 + /* argument data */ argumentSizeInWords
-	threadIndex := 0
+	sizeInWords := /* Header */ 1 + /* pointer value */ 1 + /* argument data */ argumentSizeInWords
 	numArgs := len(arguments)
 	header := (uint64(numArgs) << 40) | (uint64(nameIndex) << 24) | (uint64(threadIndex) << 16) | (uint64(sizeInWords) << 4) | uint64(recordTypeUserspaceObject)
 	if err := binary.Write(w.file, binary.LittleEndian, header); err != nil {
@@ -899,10 +891,6 @@ func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID,
 
 	if err := binary.Write(w.file, binary.LittleEndian, uint64(pointerValue)); err != nil {
 		return fmt.Errorf("failed to write pointer value - %w", err)
-	}
-
-	if err := binary.Write(w.file, binary.LittleEndian, processId); err != nil {
-		return fmt.Errorf("failed to write process ID - %w", err)
 	}
 
 	wordsWritten := 0
@@ -914,7 +902,7 @@ func (w *Writer) AddUserspaceObjectRecord(name string, processId KernelObjectID,
 		wordsWritten += size
 	}
 	if wordsWritten != argumentSizeInWords {
-		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+		return fmt.Errorf("expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	return nil
@@ -979,7 +967,7 @@ func (w *Writer) AddContextSwitchRecordWithArgs(cpuNumber uint16, outgoingThread
 		wordsWritten += size
 	}
 	if wordsWritten != argumentSizeInWords {
-		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+		return fmt.Errorf("expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	return nil
@@ -1034,7 +1022,7 @@ func (w *Writer) AddThreadWakeupRecordWithArgs(cpuNumber uint16, wakingThreadId 
 		wordsWritten += size
 	}
 	if wordsWritten != argumentSizeInWords {
-		return fmt.Errorf("Expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
+		return fmt.Errorf("expected to write %d words of argument data, but actually wrote %d", argumentSizeInWords, wordsWritten)
 	}
 
 	return nil
