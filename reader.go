@@ -1,6 +1,7 @@
 package fxt
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -25,18 +26,22 @@ func (or *offsetReader) StartRecord() {
 	or.currentRecordOffset = or.currentOffset
 }
 
-type readState struct {
-	stringTable map[uint16]string
-	threadTable map[uint16]Thread
+type RecordStateByProvider map[ProviderID]*ProviderRecordState
+type ProviderRecordState struct {
+	Name    string
+	Records []Record
+	Events  []ProviderEventType
 }
 
-func ParseRecords(input io.Reader) (records []FXTRecord, err error) {
-	records = []FXTRecord{}
+type readState struct {
+	numTicksPerSecond uint64
+	stringTable       map[uint16]string
+	threadTable       map[uint16]Thread
+}
 
-	state := readState{
-		stringTable: map[uint16]string{},
-		threadTable: map[uint16]Thread{},
-	}
+func ParseRecords(ctx context.Context, input io.Reader) (RecordStateByProvider, error) {
+	recordsByProvider := RecordStateByProvider{}
+	stateByProvider := map[ProviderID]*readState{}
 
 	offsetReader := &offsetReader{
 		reader:              input,
@@ -44,67 +49,147 @@ func ParseRecords(input io.Reader) (records []FXTRecord, err error) {
 		currentOffset:       0,
 	}
 
+	var currentProviderState *ProviderRecordState
+	var currentReadState *readState
+
 	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		offsetReader.StartRecord()
 
 		var header uint64
 		if err := binary.Read(offsetReader, binary.LittleEndian, &header); err != nil {
 			if errors.Is(err, io.EOF) {
-				return records, nil
+				// Read to the end
+				// Normal exit
+				return recordsByProvider, nil
 			}
 
 			return nil, fmt.Errorf("failed to read record header at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 		}
 
-		var record FXTRecord
+		var record Record
+		var err error
 
 		recordType := recordType(getFieldFromValue(0, 3, header))
 		switch recordType {
 		case recordTypeMetadata:
-			record, err = state.parseMetadataRecord(header, offsetReader)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read metadata record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
+			metadataType := metadataType(getFieldFromValue(16, 19, header))
+
+			switch metadataType {
+			case metadataTypeProviderInfo:
+				providerID := getFieldFromValue(20, 51, header)
+				nameLen := getFieldFromValue(52, 59, header)
+
+				name, err := readString(offsetReader, int(nameLen))
+				if err != nil {
+					return nil, fmt.Errorf("failed to read ProviderInfo metadata record at offset 0x%0x - failed to read name at offset 0x%0x - %w", offsetReader.currentRecordOffset, offsetReader.currentOffset, err)
+				}
+
+				if _, ok := recordsByProvider[ProviderID(providerID)]; ok {
+					return nil, fmt.Errorf("got multiple ProviderInfo metadata records for the same provider ID: %d", providerID)
+				}
+
+				newProviderState := &ProviderRecordState{
+					Name:    name,
+					Records: []Record{},
+					Events:  []ProviderEventType{},
+				}
+				newReadState := &readState{
+					stringTable: map[uint16]string{},
+					threadTable: map[uint16]Thread{},
+				}
+
+				recordsByProvider[ProviderID(providerID)] = newProviderState
+				stateByProvider[ProviderID(providerID)] = newReadState
+
+				currentProviderState = newProviderState
+				currentReadState = newReadState
+			case metadataTypeProviderSection:
+				providerID := getFieldFromValue(20, 51, header)
+
+				providerState, ok := recordsByProvider[ProviderID(providerID)]
+				if !ok {
+					return nil, fmt.Errorf("got ProviderSection metadata record before the provider was defined with a ProviderInfo record - provider ID: %d", providerID)
+				}
+
+				readState, ok := stateByProvider[ProviderID(providerID)]
+				if !ok {
+					return nil, fmt.Errorf("got ProviderSection metadata record before the provider was defined with a ProviderInfo record - provider ID: %d", providerID)
+				}
+
+				currentProviderState = providerState
+				currentReadState = readState
+			case metadataTypeProviderEvent:
+				providerID := getFieldFromValue(20, 51, header)
+				eventType := ProviderEventType(getFieldFromValue(52, 55, header))
+
+				providerState, ok := recordsByProvider[ProviderID(providerID)]
+				if !ok {
+					return nil, fmt.Errorf("got ProviderEvent metadata record before the provider was defined with a ProviderInfo record - provider ID: %d", providerID)
+				}
+
+				providerState.Events = append(providerState.Events, eventType)
+			case metadataTypeTraceInfo:
+				traceInfoType := traceInfoType(getFieldFromValue(20, 23, header))
+
+				// MagicNumber is the only supported info type atm
+				if traceInfoType != traceInfoTypeMagicNumber {
+					return nil, fmt.Errorf("invalid Trace Info Type %d at offset 0x%0x", traceInfoType, offsetReader.currentRecordOffset)
+				}
+
+				// Validate the value
+				if header != fxtMagic {
+					return nil, fmt.Errorf("invalid FXT magic number %0X at offset 0x%0x", header, offsetReader.currentRecordOffset)
+				}
+			default:
+				return nil, fmt.Errorf("invalid Metadata type %d at offset 0x%0x", metadataType, offsetReader.currentRecordOffset)
 			}
 		case recordTypeInitialization:
-			record, err = state.parseInitializationRecord(header, offsetReader)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read initialization record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
+			var numTicksPerSecond uint64
+
+			if err := binary.Read(offsetReader, binary.LittleEndian, &numTicksPerSecond); err != nil {
+				return nil, fmt.Errorf("failed to read ProviderInfo metadata record at offset 0x%0x - failed to read number of ticks per second at offset 0x%0x - %w", offsetReader.currentRecordOffset, offsetReader.currentOffset, err)
 			}
+
+			currentReadState.numTicksPerSecond = numTicksPerSecond
 		case recordTypeString:
-			if err := state.parseStringRecord(header, offsetReader); err != nil {
+			if err := currentReadState.parseStringRecord(header, offsetReader); err != nil {
 				return nil, fmt.Errorf("failed to read string record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeThread:
-			if err = state.parseThreadRecord(header, offsetReader); err != nil {
+			if err = currentReadState.parseThreadRecord(header, offsetReader); err != nil {
 				return nil, fmt.Errorf("failed to read thread record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeEvent:
-			record, err = state.parseEventRecord(header, offsetReader)
+			record, err = currentReadState.parseEventRecord(header, offsetReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read event record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeBlob:
-			record, err = state.parseBlobRecord(header, offsetReader)
+			record, err = currentReadState.parseBlobRecord(header, offsetReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read blob record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeUserspaceObject:
-			record, err = state.parseUserspaceObjectRecord(header, offsetReader)
+			record, err = currentReadState.parseUserspaceObjectRecord(header, offsetReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read userspace object record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeKernelObject:
-			record, err = state.parseKernelObjectRecord(header, offsetReader)
+			record, err = currentReadState.parseKernelObjectRecord(header, offsetReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read kernel object record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeScheduling:
-			record, err = state.parseSchedulingRecord(header, offsetReader)
+			record, err = currentReadState.parseSchedulingRecord(header, offsetReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read scheduling record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
 		case recordTypeLog:
-			record, err = state.parseLogRecord(header, offsetReader)
+			record, err = currentReadState.parseLogRecord(header, offsetReader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read scheduling record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
@@ -113,7 +198,7 @@ func ParseRecords(input io.Reader) (records []FXTRecord, err error) {
 
 			switch largeRecordType {
 			case largeRecordTypeLargeBlob:
-				record, err = state.parseLargeBlobRecord(header, offsetReader)
+				record, err = currentReadState.parseLargeBlobRecord(header, offsetReader)
 				if err != nil {
 					return nil, fmt.Errorf("failed to read large blob record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 				}
@@ -127,87 +212,29 @@ func ParseRecords(input io.Reader) (records []FXTRecord, err error) {
 		// Validate we read the correct amount
 		readSize := offsetReader.currentOffset - offsetReader.currentRecordOffset
 
+		var recordSize uint64
 		if recordType == recordTypeLarge {
-			recordSize := getFieldFromValue(4, 35, header)
+			recordSize = getFieldFromValue(4, 35, header)
 
-			if readSize != int64(recordSize)*8 {
-				return nil, fmt.Errorf("read incorrect number of bytes for record starting at offset 0x%0x - Expected to read %d bytes, but read %d", offsetReader.currentRecordOffset, readSize, recordSize)
-			}
 		} else {
-			recordSize := getFieldFromValue(4, 15, header)
+			recordSize = getFieldFromValue(4, 15, header)
+		}
+		expectedSize := int64(recordSize * 8)
 
-			if readSize != int64(recordSize)*8 {
-				return nil, fmt.Errorf("read incorrect number of bytes for record starting at offset 0x%0x - Expected to read %d bytes, but read %d", offsetReader.currentRecordOffset, readSize, recordSize)
+		// If we read less than expected, this isn't *ideal*. But we can skip over the rest and keep going
+		// TODO: Should we have a way to report this somehow?
+		if readSize < expectedSize {
+			if err := readAndDiscard(offsetReader, expectedSize-readSize); err != nil {
+				return nil, fmt.Errorf("failed to read remaining bytes of record at offset 0x%0x - %w", offsetReader.currentRecordOffset, err)
 			}
+		} else if readSize != expectedSize {
+			return nil, fmt.Errorf("read incorrect number of bytes for record starting at offset 0x%0x - Expected to read %d bytes, but read %d", offsetReader.currentRecordOffset, expectedSize, readSize)
 		}
 
-		// Ignore skipped records
 		if record != nil {
-			records = append(records, record)
+			currentProviderState.Records = append(currentProviderState.Records, record)
 		}
 	}
-}
-
-func (state *readState) parseMetadataRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
-	metadataType := metadataType(getFieldFromValue(16, 19, header))
-
-	switch metadataType {
-	case metadataTypeProviderInfo:
-		providerID := getFieldFromValue(20, 51, header)
-		nameLen := getFieldFromValue(52, 59, header)
-
-		name, err := readString(offsetReader, int(nameLen))
-		if err != nil {
-			return nil, fmt.Errorf("failed to read metadata record at offset 0x%0x - failed to read name at offset 0x%0x - %w", offsetReader.currentRecordOffset, offsetReader.currentOffset, err)
-		}
-
-		return ProviderInfoRecord{
-			ProviderID:   ProviderID(providerID),
-			ProviderName: name,
-		}, nil
-	case metadataTypeProviderSection:
-		providerID := getFieldFromValue(20, 51, header)
-
-		return ProviderSectionRecord{
-			ProviderID: ProviderID(providerID),
-		}, nil
-	case metadataTypeProviderEvent:
-		providerID := getFieldFromValue(20, 51, header)
-		eventType := ProviderEventType(getFieldFromValue(52, 55, header))
-
-		return ProviderEventRecord{
-			ProviderID: ProviderID(providerID),
-			EventType:  eventType,
-		}, nil
-	case metadataTypeTraceInfo:
-		traceInfoType := traceInfoType(getFieldFromValue(20, 23, header))
-
-		// MagicNumber is the only supported info type atm
-		if traceInfoType != traceInfoTypeMagicNumber {
-			return nil, fmt.Errorf("invalid Trace Info Type %d at offset 0x%0x", traceInfoType, offsetReader.currentRecordOffset)
-		}
-
-		// Validate the value
-		if header != fxtMagic {
-			return nil, fmt.Errorf("invalid FXT magic number %0X at offset 0x%0x", header, offsetReader.currentRecordOffset)
-		}
-
-		return MagicNumberRecord{}, nil
-	default:
-		return nil, fmt.Errorf("invalid Metadata type %d at offset 0x%0x", metadataType, offsetReader.currentRecordOffset)
-	}
-}
-
-func (state *readState) parseInitializationRecord(_ uint64, offsetReader *offsetReader) (FXTRecord, error) {
-	var numTicksPerSecond uint64
-
-	if err := binary.Read(offsetReader, binary.LittleEndian, &numTicksPerSecond); err != nil {
-		return nil, fmt.Errorf("failed to read number of ticks per second - %w", err)
-	}
-
-	return InitializationRecord{
-		NumTicksPerSecond: numTicksPerSecond,
-	}, nil
 }
 
 func (state *readState) parseStringRecord(header uint64, offsetReader *offsetReader) error {
@@ -243,7 +270,7 @@ func (state *readState) parseThreadRecord(header uint64, offsetReader *offsetRea
 	return nil
 }
 
-func (state *readState) parseEventRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseEventRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	eventType := eventType(getFieldFromValue(16, 19, header))
 	numArgs := getFieldFromValue(20, 23, header)
 	threadRef := uint16(getFieldFromValue(24, 31, header))
@@ -283,11 +310,11 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 	switch eventType {
 	case eventTypeInstant:
 		return InstantEventRecord{
-			Timestamp: timestamp,
-			Category:  category,
-			Name:      name,
-			Thread:    thread,
-			Args:      args,
+			TimestampNS: state.ticksToNS(timestamp),
+			Category:    category,
+			Name:        name,
+			Thread:      thread,
+			Args:        args,
 		}, nil
 	case eventTypeCounter:
 		var counterID uint64
@@ -296,28 +323,28 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return CounterEventRecord{
-			Timestamp: timestamp,
-			Category:  category,
-			Name:      name,
-			Thread:    thread,
-			Args:      args,
-			CounterID: counterID,
+			TimestampNS: state.ticksToNS(timestamp),
+			Category:    category,
+			Name:        name,
+			Thread:      thread,
+			Args:        args,
+			CounterID:   counterID,
 		}, nil
 	case eventTypeDurationBegin:
 		return DurationBeginEventRecord{
-			Timestamp: timestamp,
-			Category:  category,
-			Name:      name,
-			Thread:    thread,
-			Args:      args,
+			TimestampNS: state.ticksToNS(timestamp),
+			Category:    category,
+			Name:        name,
+			Thread:      thread,
+			Args:        args,
 		}, nil
 	case eventTypeDurationEnd:
 		return DurationEndEventRecord{
-			Timestamp: timestamp,
-			Category:  category,
-			Name:      name,
-			Thread:    thread,
-			Args:      args,
+			TimestampNS: state.ticksToNS(timestamp),
+			Category:    category,
+			Name:        name,
+			Thread:      thread,
+			Args:        args,
 		}, nil
 	case eventTypeDurationComplete:
 		var numTicks uint64
@@ -326,12 +353,12 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return DurationCompleteEventRecord{
-			Timestamp:     timestamp,
-			Category:      category,
-			Name:          name,
-			Thread:        thread,
-			Args:          args,
-			NumberOfTicks: numTicks,
+			TimestampNS: state.ticksToNS(timestamp),
+			Category:    category,
+			Name:        name,
+			Thread:      thread,
+			Args:        args,
+			DurationNS:  state.ticksToNS(numTicks),
 		}, nil
 	case eventTypeAsyncBegin:
 		var correlationID uint64
@@ -340,7 +367,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return AsyncBeginEventRecord{
-			Timestamp:     timestamp,
+			TimestampNS:   state.ticksToNS(timestamp),
 			Category:      category,
 			Name:          name,
 			Thread:        thread,
@@ -354,7 +381,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return AsyncInstantEventRecord{
-			Timestamp:     timestamp,
+			TimestampNS:   state.ticksToNS(timestamp),
 			Category:      category,
 			Name:          name,
 			Thread:        thread,
@@ -368,7 +395,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return AsyncEndEventRecord{
-			Timestamp:     timestamp,
+			TimestampNS:   state.ticksToNS(timestamp),
 			Category:      category,
 			Name:          name,
 			Thread:        thread,
@@ -382,7 +409,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return FlowBeginEvent{
-			Timestamp:     timestamp,
+			TimestampNS:   state.ticksToNS(timestamp),
 			Category:      category,
 			Name:          name,
 			Thread:        thread,
@@ -396,7 +423,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return FlowStepEvent{
-			Timestamp:     timestamp,
+			TimestampNS:   state.ticksToNS(timestamp),
 			Category:      category,
 			Name:          name,
 			Thread:        thread,
@@ -410,7 +437,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 		}
 
 		return FlowEndEvent{
-			Timestamp:     timestamp,
+			TimestampNS:   state.ticksToNS(timestamp),
 			Category:      category,
 			Name:          name,
 			Thread:        thread,
@@ -422,7 +449,7 @@ func (state *readState) parseEventRecord(header uint64, offsetReader *offsetRead
 	}
 }
 
-func (state *readState) parseBlobRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseBlobRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	nameRef := uint16(getFieldFromValue(16, 31, header))
 	payloadSize := getFieldFromValue(32, 46, header)
 	blobType := BlobType(getFieldFromValue(48, 55, header))
@@ -444,7 +471,7 @@ func (state *readState) parseBlobRecord(header uint64, offsetReader *offsetReade
 	}, nil
 }
 
-func (state *readState) parseUserspaceObjectRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseUserspaceObjectRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	threadRef := uint16(getFieldFromValue(16, 23, header))
 	nameRef := uint16(getFieldFromValue(24, 39, header))
 	numArgs := getFieldFromValue(40, 43, header)
@@ -495,7 +522,7 @@ func (state *readState) parseUserspaceObjectRecord(header uint64, offsetReader *
 	}, nil
 }
 
-func (state *readState) parseKernelObjectRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseKernelObjectRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	kernelObjectType := KernelObjectType(getFieldFromValue(16, 23, header))
 	nameRef := uint16(getFieldFromValue(24, 39, header))
 	numArgs := getFieldFromValue(40, 43, header)
@@ -528,7 +555,7 @@ func (state *readState) parseKernelObjectRecord(header uint64, offsetReader *off
 	}, nil
 }
 
-func (state *readState) parseSchedulingRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseSchedulingRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	schedulingRecordType := schedulingRecordType(getFieldFromValue(60, 63, header))
 
 	switch schedulingRecordType {
@@ -563,7 +590,7 @@ func (state *readState) parseSchedulingRecord(header uint64, offsetReader *offse
 		}
 
 		return ContextSwitchRecord{
-			Timestamp:           timestamp,
+			TimestampNS:         state.ticksToNS(timestamp),
 			CPUID:               cpuNumber,
 			OutgoingThreadID:    outgoingThreadID,
 			OutgoingThreadState: outThreadState,
@@ -595,7 +622,7 @@ func (state *readState) parseSchedulingRecord(header uint64, offsetReader *offse
 		}
 
 		return ThreadWakeupRecord{
-			Timestamp:      timestamp,
+			TimestampNS:    state.ticksToNS(timestamp),
 			CPUID:          cpuNumber,
 			WakingThreadID: wakingThreadID,
 			Args:           args,
@@ -605,7 +632,7 @@ func (state *readState) parseSchedulingRecord(header uint64, offsetReader *offse
 	}
 }
 
-func (state *readState) parseLogRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseLogRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	logMessageLen := getFieldFromValue(16, 30, header)
 	threadRef := uint16(getFieldFromValue(32, 39, header))
 
@@ -625,13 +652,13 @@ func (state *readState) parseLogRecord(header uint64, offsetReader *offsetReader
 	}
 
 	return LogRecord{
-		Timestamp: timestamp,
-		Thread:    thread,
-		Message:   message,
+		TimestampNS: state.ticksToNS(timestamp),
+		Thread:      thread,
+		Message:     message,
 	}, nil
 }
 
-func (state *readState) parseLargeBlobRecord(header uint64, offsetReader *offsetReader) (FXTRecord, error) {
+func (state *readState) parseLargeBlobRecord(header uint64, offsetReader *offsetReader) (Record, error) {
 	largeBlobType := largeBlobType(getFieldFromValue(40, 43, header))
 
 	switch largeBlobType {
@@ -687,12 +714,12 @@ func (state *readState) parseLargeBlobRecord(header uint64, offsetReader *offset
 		}
 
 		return LargeBlobWithMetadataRecord{
-			Timestamp: timestamp,
-			Category:  category,
-			Name:      name,
-			Thread:    thread,
-			Args:      args,
-			Payload:   payload,
+			TimestampNS: state.ticksToNS(timestamp),
+			Category:    category,
+			Name:        name,
+			Thread:      thread,
+			Args:        args,
+			Payload:     payload,
 		}, nil
 	case largeBlobTypeNoMetadata:
 		var formatHeader uint64
@@ -854,6 +881,11 @@ func (state *readState) parseArgument(offsetReader *offsetReader) (name string, 
 	return name, value, nil
 }
 
+func (state *readState) ticksToNS(ticks uint64) uint64 {
+	nsPerSec := uint64(1000000000)
+	return ticks * nsPerSec / state.numTicksPerSecond
+}
+
 func readString(input io.Reader, len int) (string, error) {
 	blob, err := readBlob(input, len)
 	return string(blob), err
@@ -872,4 +904,9 @@ func readBlob(input io.Reader, len int) ([]byte, error) {
 	}
 
 	return data[:len], nil
+}
+
+func readAndDiscard(input io.Reader, len int64) error {
+	_, err := io.CopyN(io.Discard, input, len)
+	return err
 }
