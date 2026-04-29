@@ -5,35 +5,9 @@ type FXTRecord interface {
 	fxtRecord()
 }
 
-type MagicNumberRecord struct{}
-
-func (MagicNumberRecord) fxtRecord() {}
-
-type ProviderInfoRecord struct {
-	ProviderID   ProviderID
-	ProviderName string
+type timestampedRecord interface {
+	getTimestampNS() uint64
 }
-
-func (ProviderInfoRecord) fxtRecord() {}
-
-type ProviderSectionRecord struct {
-	ProviderID ProviderID
-}
-
-func (ProviderSectionRecord) fxtRecord() {}
-
-type ProviderEventRecord struct {
-	ProviderID ProviderID
-	EventType  ProviderEventType
-}
-
-func (ProviderEventRecord) fxtRecord() {}
-
-type InitializationRecord struct {
-	NumTicksPerSecond uint64
-}
-
-func (InitializationRecord) fxtRecord() {}
 
 type InstantEventRecord struct {
 	Timestamp uint64
