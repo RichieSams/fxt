@@ -1,7 +1,7 @@
 package fxt
 
-// FXTRecord is a way to constrain what types can be returned in the record stream
-type FXTRecord interface {
+// Record is a way to constrain what types can be returned in the record stream
+type Record interface {
 	fxtRecord()
 }
 
@@ -10,59 +10,74 @@ type timestampedRecord interface {
 }
 
 type InstantEventRecord struct {
-	Timestamp uint64
-	Category  string
-	Name      string
-	Thread    Thread
-	Args      map[string]any
+	TimestampNS uint64
+	Category    string
+	Name        string
+	Thread      Thread
+	Args        map[string]any
 }
 
 func (InstantEventRecord) fxtRecord() {}
+func (r InstantEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type CounterEventRecord struct {
-	Timestamp uint64
-	Category  string
-	Name      string
-	Thread    Thread
-	Args      map[string]any
-	CounterID uint64
+	TimestampNS uint64
+	Category    string
+	Name        string
+	Thread      Thread
+	Args        map[string]any
+	CounterID   uint64
 }
 
 func (CounterEventRecord) fxtRecord() {}
+func (r CounterEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type DurationBeginEventRecord struct {
-	Timestamp uint64
-	Category  string
-	Name      string
-	Thread    Thread
-	Args      map[string]any
+	TimestampNS uint64
+	Category    string
+	Name        string
+	Thread      Thread
+	Args        map[string]any
 }
 
 func (DurationBeginEventRecord) fxtRecord() {}
+func (r DurationBeginEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type DurationEndEventRecord struct {
-	Timestamp uint64
-	Category  string
-	Name      string
-	Thread    Thread
-	Args      map[string]any
+	TimestampNS uint64
+	Category    string
+	Name        string
+	Thread      Thread
+	Args        map[string]any
 }
 
 func (DurationEndEventRecord) fxtRecord() {}
+func (r DurationEndEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type DurationCompleteEventRecord struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
 	Args          map[string]any
-	NumberOfTicks uint64
+	DurationNS uint64
 }
 
 func (DurationCompleteEventRecord) fxtRecord() {}
+func (r DurationCompleteEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type AsyncBeginEventRecord struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
@@ -71,9 +86,12 @@ type AsyncBeginEventRecord struct {
 }
 
 func (AsyncBeginEventRecord) fxtRecord() {}
+func (r AsyncBeginEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type AsyncInstantEventRecord struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
@@ -82,9 +100,12 @@ type AsyncInstantEventRecord struct {
 }
 
 func (AsyncInstantEventRecord) fxtRecord() {}
+func (r AsyncInstantEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type AsyncEndEventRecord struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
@@ -93,9 +114,12 @@ type AsyncEndEventRecord struct {
 }
 
 func (AsyncEndEventRecord) fxtRecord() {}
+func (r AsyncEndEventRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type FlowBeginEvent struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
@@ -104,9 +128,12 @@ type FlowBeginEvent struct {
 }
 
 func (FlowBeginEvent) fxtRecord() {}
+func (r FlowBeginEvent) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type FlowStepEvent struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
@@ -115,9 +142,12 @@ type FlowStepEvent struct {
 }
 
 func (FlowStepEvent) fxtRecord() {}
+func (r FlowStepEvent) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type FlowEndEvent struct {
-	Timestamp     uint64
+	TimestampNS   uint64
 	Category      string
 	Name          string
 	Thread        Thread
@@ -126,6 +156,9 @@ type FlowEndEvent struct {
 }
 
 func (FlowEndEvent) fxtRecord() {}
+func (r FlowEndEvent) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type BlobRecord struct {
 	Name    string
@@ -154,7 +187,7 @@ type KernelObjectRecord struct {
 func (KernelObjectRecord) fxtRecord() {}
 
 type ContextSwitchRecord struct {
-	Timestamp           uint64
+	TimestampNS         uint64
 	CPUID               uint16
 	OutgoingThreadID    KernelObjectID
 	OutgoingThreadState ThreadStateType
@@ -163,34 +196,46 @@ type ContextSwitchRecord struct {
 }
 
 func (ContextSwitchRecord) fxtRecord() {}
+func (r ContextSwitchRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type ThreadWakeupRecord struct {
-	Timestamp      uint64
+	TimestampNS    uint64
 	CPUID          uint16
 	WakingThreadID KernelObjectID
 	Args           map[string]any
 }
 
 func (ThreadWakeupRecord) fxtRecord() {}
+func (r ThreadWakeupRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type LogRecord struct {
-	Timestamp uint64
-	Thread    Thread
-	Message   string
+	TimestampNS uint64
+	Thread      Thread
+	Message     string
 }
 
 func (LogRecord) fxtRecord() {}
+func (r LogRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type LargeBlobWithMetadataRecord struct {
-	Timestamp uint64
-	Category  string
-	Name      string
-	Thread    Thread
-	Args      map[string]any
-	Payload   []byte
+	TimestampNS uint64
+	Category    string
+	Name        string
+	Thread      Thread
+	Args        map[string]any
+	Payload     []byte
 }
 
 func (LargeBlobWithMetadataRecord) fxtRecord() {}
+func (r LargeBlobWithMetadataRecord) getTimestampNS() uint64 {
+	return r.TimestampNS
+}
 
 type LargeBlobNoMetadataRecord struct {
 	Category string
